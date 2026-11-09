@@ -1,0 +1,1166 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>VERDIGRIS — anonymous forum</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%231c1c1c'/%3E%3Cpath d='M8 9l8 15 8-15' fill='none' stroke='%2300a86b' stroke-width='3.5'/%3E%3C/svg%3E">
+<script src="https://cdn.tailwindcss.com"></script>
+<script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
+<script>
+/* theme tokens — the whole redesign rides on these nine */
+tailwind.config = {
+  theme: {
+    extend: {
+      colors: {
+        ink:    '#121212',
+        panel:  '#1c1c1c',
+        panel2: '#181818',
+        line:   '#2b2b2b',
+        line2:  '#232323',
+        pgreen: '#00a86b',
+        pdeep:  '#007a48',
+        fog:    '#9aa2a6',
+        fog2:   '#6b7276',
+      },
+      fontFamily: {
+        sans: ['Inter','Segoe UI','system-ui','sans-serif'],
+        mono: ['"Cascadia Code"','Consolas','monospace'],
+      },
+    }
+  }
+};
+</script>
+<style>
+/* razor-sharp codebase: 4px corners max, 1px lines everywhere */
+* { -webkit-tap-highlight-color: transparent; }
+html { scroll-behavior: smooth; }
+body { font-feature-settings: "tnum"; }
+
+/* crisp focus rings in emerald, never the browser default blue */
+a:focus, button:focus, input:focus, textarea:focus, select:focus { outline: 2px solid rgba(0,168,107,.45); outline-offset: 1px; }
+
+/* slim dark scrollbar; forums live and die by scrolling */
+*::-webkit-scrollbar { width: 10px; height: 10px; }
+*::-webkit-scrollbar-track { background: #161616; }
+*::-webkit-scrollbar-thumb { background: #2f2f2f; border: 2px solid #161616; border-radius: 3px; }
+*::-webkit-scrollbar-thumb:hover { background: #007a48; }
+
+/* the little "unread beacon" pulse on brand-new posts */
+@keyframes beacon { 50% { opacity: .25; } }
+.beacon { width: 6px; height: 6px; border-radius: 99px; background: #00a86b; animation: beacon 1.4s ease infinite; }
+
+@keyframes toast-in  { from { transform: translateY(10px); opacity: 0; } }
+@keyframes toast-out { to   { transform: translateY(8px);  opacity: 0; } }
+.toast  { animation: toast-in .2s ease; }
+.toast.leaving { animation: toast-out .2s ease forwards; }
+
+/* table row geometry: left emerald sliver slides in on hover */
+.datarow { position: relative; }
+.datarow::before { content:""; position:absolute; left:-1px; top:0; bottom:0; width:2px; background:#00a86b; opacity:0; transition: opacity .12s; }
+.datarow:hover::before { opacity: 1; }
+
+/* pagination pills */
+.pagenum { min-width: 26px; height: 26px; display: grid; place-items: center; font-size: 11px; font-weight: 700; border: 1px solid #2b2b2b; color: #9aa2a6; border-radius: 3px; background:#1a1a1a; }
+.pagenum:hover { border-color: #00a86b; color: #e8e8e8; }
+.pagenum.cur { background:#00a86b; border-color:#00a86b; color:#06110c; }
+
+/* thread tag chips — tiny, squared, loud enough to scan at table distance */
+.tagchip { font-size: 9px; font-weight: 800; letter-spacing: .07em; text-transform: uppercase; padding: 2px 6px; border-radius: 2px; border: 1px solid; }
+.tag-src { color:#c9a2f0; border-color:#5b3b78; background:rgba(91,59,120,.18); }
+.tag-doc { color:#7ef2c4; border-color:#1f6e50; background:rgba(0,168,107,.12); }
+.tag-bug { color:#f0c983; border-color:#776122; background:rgba(150,110,30,.15); }
+.tag-ask { color:#9ec5ff; border-color:#2d4f77; background:rgba(45,79,119,.2); }
+.tag-dis { color:#a8afb3; border-color:#3a3a3a; background:rgba(255,255,255,.05); }
+
+/* GIF PfPs: ring in deep green so they read on both panel shades */
+.pfp { border-radius: 4px; object-fit: cover; background:#242424; border:1px solid #2b2b2b; }
+.pfp-home { width: 34px; height: 34px; }
+.pfp-bit  { width: 64px; height: 64px; }
+
+/* postbit — the left identity column of every post */
+.postbit { background:#181818; border-right:1px solid #232323; }
+
+textarea.field, input.field, select.field {
+  background:#121212; border:1px solid #2b2b2b; border-radius:3px;
+  padding:8px 10px; font-size:13px; color:#e8e8e8; width:100%;
+  transition: border-color .12s;
+}
+textarea.field:focus, input.field:focus, select.field:focus { border-color:#00a86b; }
+.field::placeholder { color:#5b6266; }
+select.field { appearance:none; background-image:url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='10' height='6' viewBox='0 0 10 6'%3E%3Cpath d='M1 1l4 4 4-4' stroke='%239aa2a6' fill='none' stroke-width='1.5'/%3E%3C/svg%3E"); background-repeat:no-repeat; background-position:right 10px center; }
+
+.btn-green { background:#00a86b; color:#06110c; font-weight:700; font-size:12.5px; padding:7px 14px; border-radius:3px; transition:filter .12s, transform .08s; }
+.btn-green:hover { filter:brightness(1.1); }
+.btn-green:active { transform:translateY(1px); }
+.btn-ghost { color:#9aa2a6; font-size:12px; padding:6px 10px; border:1px solid #2b2b2b; border-radius:3px; font-weight:600; }
+.btn-ghost:hover { color:#e8e8e8; border-color:#00a86b; }
+
+@media (prefers-reduced-motion: reduce) { *,*::before,*::after { animation:none !important; transition:none !important; } }
+
+</style>
+</head>
+
+<body class="bg-ink text-zinc-200 font-sans min-h-screen">
+
+<!-- ════════════════════ masthead ════════════════════ -->
+<header class="sticky top-0 z-40 bg-[#141414] border-b-2 border-pgreen">
+  <div class="max-w-[1200px] mx-auto flex items-center gap-3 px-4 h-14 relative">
+    <button id="nav-home" class="flex items-center gap-2.5 group">
+      <span class="w-8 h-8 grid place-items-center bg-pdeep rounded-[4px]">
+        <svg viewBox="0 0 32 32" width="18" height="18"><path d="M8 9l8 15 8-15" fill="none" stroke="#eaeaea" stroke-width="3.5"/></svg>
+      </span>
+      <span class="leading-none">
+        <b class="block text-white tracking-tight text-[17px] group-hover:text-pgreen transition-colors">VERDIGRIS</b>
+        <span class="block text-[9px] text-fog2 tracking-[.2em] mt-0.5">ANONYMOUS FORUM</span>
+      </span>
+    </button>
+
+    <nav class="hidden md:flex items-center gap-1 ml-6 text-[12.5px] text-fog font-semibold">
+      <button data-goto="home"  class="px-2.5 py-1.5 hover:text-white hover:bg-panel rounded-[3px]">Home</button>
+      <button data-goto="forum:intro" class="px-2.5 py-1.5 hover:text-white hover:bg-panel rounded-[3px]">Introductions</button>
+      <button data-goto="forum:news" class="px-2.5 py-1.5 hover:text-white hover:bg-panel rounded-[3px]">News</button>
+      <button data-goto="forum:tech" class="px-2.5 py-1.5 hover:text-white hover:bg-panel rounded-[3px]">Tech</button>
+      <button data-goto="forum:games" class="px-2.5 py-1.5 hover:text-white hover:bg-panel rounded-[3px]">Games</button>
+    </nav>
+
+    <div class="flex-1"></div>
+
+    <!-- notification bell: red dot when a reply lands on YOUR thread -->
+    <button id="notif-bell" class="relative inline-block px-2 py-1.5 text-fog hover:text-white hover:bg-panel rounded-[3px] transition-colors" title="Notifications">
+      <svg viewBox="0 0 24 24" width="18" height="18" fill="none" stroke="#9aa2a6" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" class="hover:stroke-[#00a86b] transition-colors"><path d="M18 8a6 6 0 0 0-12 0c0 7-3 9-3 9h18s-3-2-3-9"/><path d="M13.7 21a2 2 0 0 1-3.4 0"/></svg>
+      <span id="notif-dot" class="hidden absolute top-0 right-0 h-2 w-2 bg-red-600 rounded-full"></span>
+    </button>
+    <div id="notif-pop" class="hidden absolute right-8 top-12 z-50 w-64 bg-panel border border-line rounded-[4px] shadow-[0_20px_60px_-15px_rgba(0,0,0,.85)]"></div>
+
+    <!-- session chip: green dot = this tab is live -->
+    <button id="session-chip" class="flex items-center gap-2 pl-2 pr-2.5 py-1 bg-panel border border-line rounded-[3px] hover:border-pgreen transition-colors" title="Session & identity">
+      <span class="relative flex items-center">
+        <span class="w-2 h-2 rounded-full bg-pgreen shadow-[0_0_6px_rgba(0,168,107,.9)]"></span>
+      </span>
+      <img id="chip-pfp" class="hidden w-6 h-6 pfp" alt="">
+      <span id="chip-fallback" class="w-6 h-6 grid place-items-center pfp text-[11px] font-extrabold text-pgreen">?</span>
+      <b id="chip-handle" class="text-[12px] tracking-widest text-zinc-300"></b>
+    </button>
+  </div>
+</header>
+
+<!-- breadcrumb rail -->
+<div id="crumb" class="bg-panel2 border-b border-line">
+  <div class="max-w-[1200px] mx-auto px-4 h-9 flex items-center gap-2 text-[11.5px] text-fog2" aria-live="polite"></div>
+</div>
+
+<!-- ════════════════════ body ════════════════════ -->
+<main class="max-w-[1200px] mx-auto px-4 py-5 grid gap-5 grid-cols-1 lg:grid-cols-[minmax(0,1fr)_320px] items-start">
+
+  <!-- ——— left panel: everything routed ——— -->
+  <section id="stage" class="min-w-0">
+
+    <!-- HOME -->
+    <div id="view-home">
+      <div id="cat-blocks" class="space-y-5"></div>
+      <div class="bg-panel border border-line rounded-[4px] px-4 py-2.5 mt-5 flex flex-wrap gap-x-6 gap-y-1 text-[11px] text-fog2">
+        <span>Threads: <b id="f-total-threads" class="text-zinc-300 font-bold">0</b></span>
+        <span>Posts: <b id="f-total-posts" class="text-zinc-300 font-bold">0</b></span>
+        <span>Sessions: <b class="text-pgreen font-bold">1</b> (this tab)</span>
+        <span class="flex-1"></span>
+      </div>
+    </div>
+
+    <!-- FORUM -->
+    <div id="view-forum" class="hidden min-w-0">
+      <div id="forum-head"></div>
+      <div id="forum-table"></div>
+      <div id="forum-pages" class="flex items-center gap-1.5 mt-3 text-[11px] text-fog2"></div>
+    </div>
+
+    <!-- THREAD -->
+    <div id="view-thread" class="hidden min-w-0 space-y-3">
+      <div id="thread-head"></div>
+      <div id="thread-posts"></div>
+      <div id="thread-pages" class="flex items-center gap-1.5 text-[11px] text-fog2"></div>
+      <div id="quick-reply"></div>
+    </div>
+  </section>
+
+  <!-- ——— right sidebar ——— -->
+  <aside class="space-y-5 order-first lg:order-none">
+
+    <!-- latest posts feed -->
+    <div class="bg-panel border border-line rounded-[4px]">
+      <div class="flex items-center gap-2 px-3.5 h-10 border-b-2 border-pgreen bg-[#161d1a]">
+        <span class="w-1.5 h-1.5 bg-pgreen rounded-full"></span>
+        <b class="text-[12px] tracking-wide text-[#cfe8dd]">LATEST POSTS</b>
+      </div>
+      <div id="latest-feed" class="divide-y divide-line2"></div>
+    </div>
+
+    <!-- who's online -->
+    <div class="bg-panel border border-line rounded-[4px]">
+      <div class="flex items-center gap-2 px-3.5 h-10 border-b-2 border-pgreen bg-[#161d1a]">
+        <span class="w-1.5 h-1.5 bg-pgreen rounded-full"></span>
+        <b class="text-[12px] tracking-wide text-[#cfe8dd]">WHO'S ONLINE</b>
+      </div>
+      <div id="online-strip" class="p-3.5"></div>
+    </div>
+
+    <!-- session quick stats -->
+    <div class="bg-panel border border-line rounded-[4px]">
+      <div class="flex items-center gap-2 px-3.5 h-10 border-b-2 border-pgreen bg-[#161d1a]">
+        <span class="w-1.5 h-1.5 bg-pgreen rounded-full"></span>
+        <b class="text-[12px] tracking-wide text-[#cfe8dd]">YOUR SESSION</b>
+      </div>
+      <div id="session-strip" class="p-3.5"></div>
+    </div>
+  </aside>
+</main>
+
+<div id="toasts" class="fixed bottom-4 right-4 z-50 space-y-2 w-80" aria-live="polite"></div>
+<div id="modal-root" class="hidden fixed inset-0 z-40 grid place-items-center p-4"></div>
+
+<script>
+"use strict";
+
+/* ═════════════════════════════════════════════════════════════════
+   VERDIGRIS — the compact engine.
+   One file, no servers, no bots, no audio. The pipeline:
+   LocalStorage state in → views re-render → state out.
+   ═════════════════════════════════════════════════════════════════ */
+
+(() => {
+
+/* ═════════════════════════════════════════════════════════════════
+   ☁ CLOUD SYNC — paste your FREE Supabase keys below.
+   supabase.com → new project (free tier) → Project Settings → API
+     SUPABASE_URL = "https://xxxxx.supabase.co"
+     SUPABASE_KEY = "eyJ..." (anon, public)
+   Run this ONCE in the Supabase SQL Editor, then enable Realtime:
+     create table vf_state (id text primary key, data jsonb, updated_at timestamptz default now());
+     alter table vf_state enable row level security;
+     create policy "vf_public" on vf_state for all using (true) with check (true);
+     alter publication supabase_realtime add table vf_state;
+   With keys pasted: threads + posts live in the cloud, every device
+   sees each other's posts in real time, and your profile (name /
+   avatar / bio) syncs under your own session key.
+   With keys left empty: everything still works, stored locally.
+   ═════════════════════════════════════════════════════════════════ */
+const SUPABASE_URL = "";  // ← paste here
+const SUPABASE_KEY = "";  // ← paste here
+
+let SC = null, cloudOn = false;
+if (typeof supabase !== "undefined" && SUPABASE_URL && SUPABASE_KEY) {
+  try { SC = supabase.createClient(SUPABASE_URL, SUPABASE_KEY); } catch (e) { SC = null; }
+}
+
+/* cloud bootstrap: pull the board + this session's profile, then ride realtime */
+async function cloudInit() {
+  if (!SC) return;
+  try {
+    const meRow = await SC.from("vf_state").select("data").eq("id", "profile:" + ME.token).maybeSingle();
+    if (!meRow.error && meRow.data?.data && meRow.data.data.token === ME.token) {
+      ME = { bio: "", ...meRow.data.data }; LS.write(SESSION, ME);
+    }
+    const board = await SC.from("vf_state").select("data").eq("id", "forum").maybeSingle();
+    if (!board.error && board.data?.data?.threads) {
+      DB = { threads: board.data.data.threads || [], posts: board.data.data.posts || [],
+             viewCounts: board.data.data.viewCounts || {}, blocked: board.data.data.blocked || [],
+             reactions: board.data.data.reactions || {} };
+      LS.write(DB_KEY, DB);
+    }
+    cloudOn = true;
+    SC.channel("vf-feed").on("postgres_changes", { event: "*", schema: "public", table: "vf_state" }, (pay) => {
+      const d = pay.new && pay.new.data;
+      if (!d) return;
+      if (pay.new.id === "forum") {
+        DB = { threads: d.threads || [], posts: d.posts || [], viewCounts: d.viewCounts || {},
+               blocked: d.blocked || [], reactions: d.reactions || {} };
+        render();
+      } else if (pay.new.id === "profile:" + ME.token && d.token === ME.token) {
+        ME = { bio: "", ...d }; LS.write(SESSION, ME); renderChip();
+      }
+    }).subscribe();
+    render();
+    toast("Cloud sync is live — posts from any device appear here in real time.", "ok", 5000);
+  } catch (e) { toast("Cloud sync failed: " + (e.message || e), "warn", 6000); }
+}
+
+/* profile write-through: local session always, cloud row when synced */
+function syncProfile() {
+  LS.write(SESSION, ME);
+  if (SC && cloudOn) SC.from("vf_state").upsert({ id: "profile:" + ME.token, data: ME });
+}
+
+/* ——— toolbelt ——— */
+
+const $  = (s, r = document) => r.querySelector(s);
+const $$ = (s, r = document) => [...r.querySelectorAll(s)];
+const esc = (s) => String(s ?? "")
+  .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+  .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+const pad2 = (n) => String(n).padStart(2, "0");
+
+function ago(ts) {
+  const s = Math.floor((Date.now() - ts) / 1000);
+  if (s < 50)   return "just now";
+  if (s < 3600) return Math.floor(s / 60) + ((Math.floor(s / 60)) === 1 ? " minute ago" : " minutes ago");
+  if (s < 86400) { const h = Math.floor(s / 3600); return h === 1 ? "1 hour ago" : h + " hours ago"; }
+  const d = Math.floor(s / 86400); return d === 1 ? "1 day ago" : d + " days ago";
+}
+
+/* exact stamps for the Last Post column — forums read precise, not fuzzy */
+const MONTHS = ["Jan","Feb","Mar","Apr","May","Jun","Jul","Aug","Sep","Oct","Nov","Dec"];
+function stamp(ts) {
+  const d = new Date(ts);
+  return `${MONTHS[d.getMonth()]} ${d.getDate()}, ${d.getFullYear()} ${pad2(d.getHours())}:${pad2(d.getMinutes())}`;
+}
+
+const LS = {
+  read(k, f) { try { const v = localStorage.getItem(k); return v == null ? f : JSON.parse(v); } catch { return f; } },
+  write(k, v) { try { localStorage.setItem(k, JSON.stringify(v)); return true; } catch { return false; } },
+};
+const DB_KEY  = "vf_state_v1";
+const SESSION = "vf_session_v1";
+
+/* ——— the boards ——— */
+
+const CATS = [
+  { id: "general", head: "General",       blurb: "Say hello. Keep up with the world." },
+  { id: "cyber",   head: "Cyber & Tech",  blurb: "Machines, exploits, and everything shiny." },
+  { id: "media",   head: "Media & Hub",   blurb: "Feeds, games, and drawn worlds." },
+];
+
+const FORUMS = [
+  { id: "intro",  cat: "general", name: "/intro/",  desc: "Introductions",                    fs: ["dis"] },
+  { id: "news",   cat: "general", name: "/news/",   desc: "World News & Discussions",        fs: ["dis","ask"] },
+  { id: "tech",   cat: "cyber",   name: "/tech/",   desc: "Tech, Hardware & Web Dev",        fs: ["src","doc","ask"] },
+  { id: "leaks",  cat: "cyber",   name: "/leaks/",  desc: "Leaks & Databases",               fs: ["doc","src"] },
+  { id: "cracks", cat: "cyber",   name: "/cracks/", desc: "Cracked Accounts & Software",     fs: ["dis","doc"] },
+  { id: "social", cat: "media",   name: "/social/", desc: "TikTok & Social Media Discussion", fs: ["dis"] },
+  { id: "games",  cat: "media",   name: "/games/",  desc: "Gaming Hub",                      fs: ["dis","ask"] },
+  { id: "otaku",  cat: "media",   name: "/otaku/",  desc: "Anime, Manga & Comics",           fs: ["dis"] },
+];
+
+const TAGS = {
+  src: { cls: "tag-src", label: "SOURCE CODE" },
+  doc: { cls: "tag-doc", label: "DOCUMENTS" },
+  bug: { cls: "tag-bug", label: "BUG" },
+  ask: { cls: "tag-ask", label: "QUESTION" },
+  dis: { cls: "tag-dis", label: "DISCUSSION" },
+};
+
+const PAGE_SIZE = 10;
+
+/* ——— session: one key, per browser, forever ——— */
+
+let ME = LS.read(SESSION, null);
+if (!ME || !/^vf-[\w-]{16,}$/.test(ME.token || "")) {
+  const tok = "vf-" + Array.from(crypto.getRandomValues(new Uint8Array(12)))
+    .map(b => b.toString(36).padStart(2, "0")).join("").slice(0, 20);
+  ME = { token: tok, handle: mintHandle(), name: "", pfp: null, bio: "", joined: Date.now() };
+  LS.write(SESSION, ME);
+}
+function mintHandle() {
+  const A = "ABCDEFGHJKLMNPQRSTUVWXYZ23456789"; let out = "";
+  for (let i = 0; i < 6; i++) out += A[Math.floor(Math.random() * A.length)];
+  return out;
+}
+const myHandle = () => ME.name.trim() || ME.handle;
+
+/* notification bell engine: watch for non-OP replies landing in threads whose
+   author IS the active session key — self posts never flare the dot */
+let bootTs = Date.now();
+const seenPosts = new Set();
+let alerts = [];
+function checkNotifications() {
+  const dot = $("#notif-dot");
+  if (!dot) return;
+  for (const p of DB.posts) {
+    if (seenPosts.has(p.id)) continue;
+    seenPosts.add(p.id);
+    const t = tOf(p.threadId);
+    if (!t || p.createdAt < bootTs || isMe(p.author) || !t.author || t.author.token !== ME.token) continue;
+    const first = threadPosts(t)[0];
+    if (first && first.id === p.id) continue; // opening post, not a reply
+    alerts.push({ pid: p.id, threadId: p.threadId, by: nameOf(p.author) });
+    if (alerts.length > 8) alerts = alerts.slice(-8);
+    dot.classList.remove("hidden");
+  }
+}
+/* other tabs on this machine (or the realtime cloud push) repaint the board —
+   the storage event re-syncs instantly so the bell reacts to those replies */
+window.addEventListener("storage", (e) => {
+  if (e.key !== DB_KEY || !e.newValue) return;
+  try {
+    const d = JSON.parse(e.newValue);
+    if (!d.posts) return;
+    DB = { threads: d.threads || [], posts: d.posts || [], viewCounts: d.viewCounts || {},
+           blocked: d.blocked || [], reactions: d.reactions || {} };
+    render();
+  } catch (err) {}
+});
+
+/* reply attribution: remember the comment this reply targets */
+let replyTarget = null;
+
+/* ——— state ——— */
+
+let DB = LS.read(DB_KEY, { threads: [], posts: [], viewCounts: {}, blocked: [], reactions: {} });
+let saveT = null;
+function save() {
+  // debounce ~300ms: reply spam shouldn't lockstep-crash LocalStorage on IE-era disks
+  clearTimeout(saveT);
+  saveT = setTimeout(() => {
+    const ok = LS.write(DB_KEY, DB); // local cache keeps offline / keyless mode alive
+    if (SC && cloudOn) SC.from("vf_state").upsert({ id: "forum", data: DB }); // one jsonb row = one world-visible board
+    if (!ok) { // a single >5MB GIF can blow the quota; shed the biggest data-URL we own and retry
+      let worst = null, size = 0;
+      for (const t of DB.threads) if (t.image && t.image.length > size) { size = t.image.length; worst = t; }
+      for (const p of DB.posts) if (p.image && p.image.length > size) { size = p.image.length; worst = p; }
+      if (worst) { delete worst.image; save(); toast("Storage ceiling hit — the largest attached image was dropped to fit.", "warn", 6000); }
+    }
+  }, 300);
+}
+
+const author = (o) => o || { token: "ghost", handle: "??????", name: "", pfp: null, joined: 0 };
+const isMe   = (a) => a && a.token === ME.token;
+/* a key silences both its token and its handle — some users paste one, some the other */
+const blockedAuthor = (a) => !a ? false :
+  DB.blocked.some(b => b.key === a.token || b.key.toUpperCase() === String(a.handle || "").toUpperCase());
+
+const nameOf = (a) => a?.name?.trim() || a?.handle || "Anonymous";
+const postsIn = (tid) => DB.posts.filter(p => p.threadId === tid).sort((x, y) => x.createdAt - y.createdAt);
+const threadPosts = (t) => postsIn(t.id);
+const threadsOf = (fid) => DB.threads.filter(t => t.forumId === fid);
+const repliesOf = (t) => Math.max(threadPosts(t).length - 1, 0);
+const lastPostOf = (t) => { const ps = threadPosts(t); return ps.length ? ps[ps.length - 1] : null; };
+const lastActivity = (t) => { const lp = lastPostOf(t); return lp ? Math.max(lp.createdAt, t.createdAt) : t.createdAt; };
+const lastOfForum = (fid) => {
+  let best = null;
+  for (const t of threadsOf(fid)) {
+    const lp = lastPostOf(t);
+    if (lp && (!best || lp.createdAt > best.createdAt)) best = lp;
+  }
+  return best;
+};
+const tOf = (tid) => DB.threads.find(t => t.id === tid);
+
+/* ════════════════════ router ════════════════════ */
+
+let route = { view: "home" };
+window.addEventListener("hashchange", fromHash);
+
+function nav(to) { location.hash = to === "home" ? "" : "#/" + to; }
+function fromHash() {
+  const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
+  if (!h) route = { view: "home" };
+  else if (h.startsWith("thread/"))  route = { view: "thread", id: Number(h.split("/")[1]), page: Number(h.split("/")[2]) || 1, pid: h.split("/")[3] || null };
+  else if (h.startsWith("forum/"))   route = { view: "forum", id: h.split("/")[1], page: Number(h.split("/")[2]) || 1 };
+  else route = { view: "home", stray: h };
+  render();
+}
+
+/* ════════════════════ chrome: crumbs, chip, sidebar ════════════════════ */
+
+function crumbs(path) {
+  const rail = path.map((p, i) =>
+    i === path.length - 1
+      ? `<b class="text-zinc-400 font-semibold">${esc(p[0])}</b>`
+      : `<button data-goto="${esc(p[1])}" class="goto hover:text-pgreen">${esc(p[0])}</button>`
+  ).join(`<span class="text-fog2 px-0.5">›</span>`);
+  $("#crumb .max-w-\\[1200px\\]").innerHTML =
+    `<button data-goto="home" class="goto hover:text-pgreen font-semibold">Home</button>` + (path.length ? ` <span>›</span> ` + rail : "");
+  bindGotos();
+}
+
+function renderChip() {
+  /* badge reads the display name (myHandle()) so a saved custom name shows
+     instantly; the raw handle is only ever a fallback */
+  $("#chip-handle").textContent = myHandle();
+  const p = $("#chip-pfp"), f = $("#chip-fallback");
+  if (ME.pfp) { p.src = ME.pfp; p.classList.remove("hidden"); f.classList.add("hidden"); }
+  else { p.classList.add("hidden"); f.classList.remove("hidden"); f.textContent = (myHandle()[0] || "?").toUpperCase(); }
+}
+
+function avatar(a, cls) {
+  a = author(a);
+  if (a.pfp) return `<img src="${esc(a.pfp)}" alt="" class="pfp ${cls}">
+    <span class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-pgreen border-2 border-panel" title="online session"></span>`;
+  return `<span class="grid place-items-center pfp ${cls} text-[13px] font-extrabold text-[#dfe8e4] bg-gradient-to-br from-[#1f2a25] to-[#161a17]">${esc((nameOf(a)[0] || "?").toUpperCase())}
+    <span class="absolute -bottom-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-pgreen border-2 border-panel" title="online session"></span></span>`;
+}
+
+function renderSidebar() {
+  /* latest posts: the feed that makes the board look alive */
+  const feed = [...DB.posts].sort((x, y) => y.createdAt - x.createdAt).slice(0, 8);
+  $("#latest-feed").innerHTML = feed.length ? feed.map(p => {
+    const t = tOf(p.threadId);
+    if (!t) return "";
+    const fresh = Date.now() - p.createdAt < 15 * 60000;
+    // deep link: every card lands on the page that holds this exact post
+    const vis = threadPosts(t).filter(q => !blockedAuthor(q.author));
+    const pIdx = vis.findIndex(q => q.id === p.id);
+    const pPg = Math.floor((pIdx < 0 ? 0 : pIdx) / PAGE_SIZE) + 1;
+    return `<button data-goto="thread:${t.id}/${pPg}/${p.id}" class="goto w-full text-left px-3.5 py-2.5 hover:bg-panel2 transition-colors flex gap-2.5 items-start">
+      <span class="relative shrink-0">${avatar(p.author, "pfp-home")}</span>
+      <span class="min-w-0">
+        <b class="block text-[12px] leading-snug text-zinc-200 truncate-2">${esc(t.title)}</b>
+        <span class="block text-[10.5px] text-fog2 mt-0.5">by <b class="text-fog font-semibold">${esc(nameOf(p.author))}</b>
+          · ${ago(p.createdAt)}${fresh ? ' <span class="beacon inline-block align-middle ml-1"></span>' : ""}</span>
+      </span>
+    </button>`;
+  }).join("") : `<p class="px-3.5 py-6 text-[11.5px] text-fog2 leading-relaxed">No posts yet. The floor is fresh green — post the first thread and this feed starts moving.</p>`;
+
+  $("#online-strip").innerHTML = `
+    <div class="flex items-center gap-2.5">
+      <span class="relative">${avatar(ME, "pfp-home")}</span>
+      <div>
+        <b class="block text-[12px] text-zinc-200">${esc(myHandle())}</b>
+        <span class="text-[10px] text-fog2">this tab · <span class="text-pgreen font-bold">online</span></span>
+      </div>
+    </div>
+    <p class="text-[10.5px] text-fog2 mt-2.5 leading-relaxed">You are the only session here. Other tabs on other machines appear once they hold a key.</p>`;
+
+  const mine = DB.posts.filter(p => isMe(p.author)).length;
+  const myThreads = DB.threads.filter(t => isMe(t.author)).length;
+  $("#session-strip").innerHTML = `
+    <div class="grid grid-cols-2 gap-2 text-center">
+      <div class="bg-panel2 border border-line rounded-[3px] py-2"><b class="block text-[15px] text-pgreen font-extrabold">${myThreads}</b><span class="text-[9px] tracking-widest text-fog2">THREADS</span></div>
+      <div class="bg-panel2 border border-line rounded-[3px] py-2"><b class="block text-[15px] text-pgreen font-extrabold">${mine}</b><span class="text-[9px] tracking-widest text-fog2">POSTS</span></div>
+    </div>
+    <button id="session-open" class="btn-ghost w-full mt-2.5 text-center">manage session →</button>`;
+  $("#session-open").onclick = () => openSession();
+  /* feed cards: explicitly swap the route, re-render the board panel into the
+     DOM, then scrollIntoView the post — no dead clicks, no empty space */
+  const feedBtns = $("#latest-feed").querySelectorAll("button.goto");
+  feedBtns.forEach(b => b.onclick = () => {
+    const [, arg] = b.dataset.goto.split(":");
+    const [id, pg, pid] = arg.split("/");
+    if (route.view !== "thread" || Number(route.id) !== Number(id)) {
+      $("#view-home").classList.add("hidden");   // clear current view state
+      $("#view-forum").classList.add("hidden");
+      $("#view-thread").classList.remove("hidden");
+    }
+    route = { view: "thread", id: Number(id), page: Number(pg) || 1, pid: pid || null };
+    location.hash = "#/thread/" + id + "/" + (Number(pg) || 1) + (pid ? "/" + pid : "");
+    render();                                     // injects the thread panel fresh
+    const targetThreadElement = $('[data-pid="' + pid + '"]') || $("#view-thread");
+    if (targetThreadElement) targetThreadElement.scrollIntoView({ behavior: "smooth", block: "center" });
+    route.pid = null;
+  });
+  bindGotos();
+}
+
+/* ════════════════════ views ════════════════════ */
+
+function render() {
+  const { view } = route;
+  $("#view-home").classList.toggle("hidden",  view !== "home");
+  $("#view-forum").classList.toggle("hidden", view !== "forum");
+  $("#view-thread").classList.toggle("hidden",view !== "thread");
+
+  $("#nav-home").onclick = () => nav("home");
+  $$("[data-goto]").forEach(b => { b.onclick = () => goto(b.dataset.goto); });
+  $("#session-chip").onclick = () => openSession();
+
+  if (view === "home") { renderHome(); crumbs([]); }
+  if (view === "forum") {
+    const f = FORUMS.find(x => x.id === route.id);
+    if (!f) { location.hash = ""; return; }
+    renderForum(f, route.page || 1); crumbs([[f.name, "forum:" + f.id]]);
+  }
+  if (view === "thread") {
+    const t = tOf(route.id);
+    if (!t) { location.hash = ""; return; }
+    const f = FORUMS.find(x => x.id === t.forumId);
+    renderThread(t, route.page || 1); crumbs([[f.name, "forum:" + f.id], [t.title, "thread:" + t.id]]);
+  }
+  renderChip(); renderSidebar();
+  checkNotifications();
+  refreshTotals();
+}
+
+/* the totals strip lives in the home view, but keeps its own heartbeat so it
+   never shows stale numbers when you come back up */
+function refreshTotals() {
+  const el = $("#f-total-threads"), el2 = $("#f-total-posts");
+  if (!el) return;
+  el.textContent = DB.threads.filter(t => !blockedAuthor(t.author)).length;
+  el2.textContent = DB.posts.filter(p => !blockedAuthor(p.author)).length;
+}
+
+function goto(str) {
+  const [kind, arg] = str.split(":");
+  nav(/^forum/.test(kind) ? "forum/" + arg : /^thread/.test(kind) ? "thread/" + arg : "home");
+}
+
+/* ——— home: category blocks with the three-column geometry ——— */
+
+function renderHome() {
+  $("#cat-blocks").innerHTML = CATS.map(c => {
+    const fs = FORUMS.filter(f => f.cat === c.id);
+    const rows = fs.map(f => {
+      const ts = threadsOf(f.id).filter(t => !blockedAuthor(t.author));
+      const ps = ts.reduce((n, t) => n + repliesOf(t) + 1, 0);
+      const lp = lastOfForum(f.id);
+      return `<div class="datarow grid grid-cols-[minmax(0,1fr)_86px_86px_210px] gap-3 px-3.5 py-2.5 hover:bg-panel2 border-b border-line2 last:border-b-0">
+        <button data-goto="forum:${f.id}" class="goto text-left min-w-0">
+          <b class="block text-[13.5px] text-zinc-100 font-bold">${esc(f.name)}</b>
+          <span class="block text-[11px] text-fog2 mt-0.5 leading-snug">${esc(f.desc)}</span>
+        </button>
+        <b class="place-self-center text-center text-[12.5px] font-extrabold text-pgreen tabular-nums" title="threads">${ts.length}</b>
+        <b class="place-self-center text-center text-[12.5px] font-extrabold text-pgreen tabular-nums" title="posts">${ps}</b>
+        ${lp && !blockedAuthor(lp.author) ? `<button data-goto="thread:${lp.threadId}" class="goto text-left text-[10.5px] leading-snug place-self-center min-w-0">
+            <span class="block text-fog truncate">${esc(tOf(lp.threadId)?.title)}</span>
+            <span class="block text-fog2 mt-0.5">by <b class="text-fog font-semibold">${esc(nameOf(lp.author))}</b> · ${stamp(lp.createdAt)}</span>
+          </button>`
+        : `<span class="place-self-center text-[10.5px] text-fog2 italic">— quiet —</span>`}
+      </div>`;
+    }).join("");
+    return `<section class="bg-panel border border-line rounded-[4px] overflow-hidden">
+      <header class="px-3.5 h-10 flex items-center gap-2.5 bg-[#161d1a] border-b-2 border-pgreen">
+        <span class="w-1.5 h-1.5 bg-pgreen rounded-full"></span>
+        <b class="text-[12px] tracking-[.12em] text-[#cfe8dd] uppercase">${esc(c.head)}</b>
+        <span class="text-[10px] text-fog2 ml-1">${esc(c.blurb)}</span>
+      </header>
+      <div class="grid grid-cols-[minmax(0,1fr)_86px_86px_210px] gap-3 px-3.5 py-1.5 border-b border-line bg-[#171717] text-[9px] tracking-[.18em] text-fog2 font-extrabold uppercase">
+        <span>Forum</span><span class="text-center">Threads</span><span class="text-center">Posts</span><span class="pl-3">Last Post</span>
+      </div>
+      ${rows}
+    </section>`;
+  }).join("");
+  bindGotos();
+}
+
+/* ——— forum: the spreadsheet ——— */
+
+function forumTagRow(t) {
+  const tag = t.tag && TAGS[t.tag] ? TAGS[t.tag] : TAGS.dis;
+  return `<span class="tagchip ${tag.cls}">${tag.label}</span>`;
+}
+
+function renderForum(f, page) {
+  const visible = threadsOf(f.id).filter(t => !blockedAuthor(t.author))
+    .sort((a, b) => b.pinned - a.pinned || lastActivity(b) - lastActivity(a));
+  const pageCount = Math.max(1, Math.ceil(visible.length / PAGE_SIZE));
+  page = Math.min(page, pageCount);
+  const slice = visible.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+
+  $("#forum-head").innerHTML = `
+    <div class="flex items-end justify-between gap-3 flex-wrap mb-3">
+      <div class="min-w-0">
+        <h1 class="text-white text-[19px] font-extrabold tracking-tight">${esc(f.name)}</h1>
+        <p class="text-[11.5px] text-fog2 mt-0.5">${esc(f.desc)} · ${visible.length} thread${visible.length===1?"":"s"}</p>
+      </div>
+      <button id="new-thread" class="btn-green">＋ POST THREAD</button>
+    </div>`;
+
+  $("#forum-table").innerHTML = `
+    <div class="bg-panel border border-line rounded-[4px] overflow-hidden">
+      <div class="grid grid-cols-[minmax(0,1fr)_74px_74px_200px] gap-3 px-3.5 py-2 border-b border-line bg-[#171717] text-[9px] tracking-[.18em] text-fog2 font-extrabold uppercase">
+        <span>Discussion</span><span class="text-center">Replies</span><span class="text-center">Views</span><span class="pl-2">Last Post</span>
+      </div>
+      ${slice.length ? slice.map(t => {
+        const lp = lastPostOf(t);
+        return `<div class="datarow grid grid-cols-[minmax(0,1fr)_74px_74px_200px] gap-3 px-3.5 py-2.5 hover:bg-panel2 border-b border-line2 last:border-b-0">
+          <div class="min-w-0">
+            <button data-goto="thread:${t.id}" class="goto text-left block">
+              <b class="text-[13px] text-zinc-100 font-bold hover:text-pgreen transition-colors leading-snug">${esc(t.title)}</b>
+            </button>
+            <button data-share="${t.id}" class="text-fog2 hover:text-pgreen text-[10.5px] mt-0.5 align-middle" title="copy thread link">⤴</button>
+            <span class="flex items-center gap-1.5 mt-1 flex-wrap text-[10.5px] text-fog2">
+              ${forumTagRow(t)}
+              <span>by <b class="text-fog font-semibold">${esc(nameOf(t.author))}</b></span>
+              <span>· ${stamp(t.createdAt)}</span>
+            </span>
+          </div>
+          <span class="place-self-center text-center text-[12.5px] font-extrabold ${repliesOf(t) ? "text-pgreen" : "text-fog2"}">${repliesOf(t)}</span>
+          <span class="place-self-center text-center text-[12px] text-fog tabular-nums">${DB.viewCounts[t.id] || 0}</span>
+          <button data-goto="thread:${t.id}" class="goto text-left text-[10.5px] leading-snug place-self-center min-w-0">
+            ${lp ? `<span class="block text-fog">${stamp(lp.createdAt)}</span>
+                   <span class="block text-fog2 mt-0.5">by <b class="text-fog font-semibold">${esc(nameOf(lp.author))}</b></span>`
+                 : `<span class="text-fog2 italic">—</span>`}
+          </button>
+        </div>`;
+      }).join("") : `<div class="px-4 py-10 text-center">
+          <p class="text-[13px] text-fog font-semibold">No discussions in this forum yet.</p>
+          <p class="text-[11px] text-fog2 mt-1">Hit <b class="text-pgreen">POST THREAD</b> and open the account-less record.</p>
+        </div>` }
+    </div>`;
+
+  /* pagination row: Pages: 1 2 3 … — built from real row counts */
+  $("#forum-pages").innerHTML = pageCount > 1 || visible.length ? `
+    <span class="tracking-widest uppercase font-bold mr-1">Pages:</span>
+    ${Array.from({ length: pageCount }, (_, i) =>
+      `<button data-page="${i + 1}" class="pagenum ${i + 1 === page ? "cur" : ""}">${i + 1}</button>`).join("")}
+    <span class="ml-2 text-[10.5px]">${visible.length} total</span>` : "";
+
+  $$("[data-page]", $("#forum-pages")).forEach(b => b.onclick = () => nav("forum/" + f.id + "/" + b.dataset.page));
+  $$("[data-share]").forEach(b => b.onclick = () => shareThread(b.dataset.share));
+  $("#new-thread").onclick = () => newThreadModal(f);
+  bindGotos();
+}
+
+/* ——— thread: postbit + posts ——— */
+
+function renderThread(t, page) {
+  // every open counts a view; self-bumping reads still count, forums do it too
+  DB.viewCounts[t.id] = (DB.viewCounts[t.id] || 0) + 1;
+  save();
+
+  const ps = threadPosts(t).filter(p => !blockedAuthor(p.author));
+  const pageCount = Math.max(1, Math.ceil(ps.length / PAGE_SIZE));
+  page = Math.min(page, pageCount);
+  const slice = ps.slice((page - 1) * PAGE_SIZE, page * PAGE_SIZE);
+  const f = FORUMS.find(x => x.id === t.forumId);
+
+  $("#thread-head").innerHTML = `
+    <div class="bg-panel border border-line rounded-[4px] px-4 py-3 flex items-center gap-3 flex-wrap">
+      <button id="exit-forum" class="btn-ghost" title="back to ${esc(f.name)}">← ${esc(f.name)}</button>
+      <div class="min-w-0 flex-1">
+        <div class="flex items-center gap-2">
+          <h1 class="text-white text-[16px] font-extrabold leading-snug truncate">${esc(t.title)}</h1>
+          <button data-share="${t.id}" class="text-fog2 hover:text-pgreen text-[13px] shrink-0" title="copy thread link">⤴</button>
+        </div>
+        <span class="flex items-center gap-2 mt-1 text-[10.5px] text-fog2">${forumTagRow(t)}
+          <span>${ps.length} post${ps.length === 1 ? "" : "s"} · started ${ago(t.createdAt)} by <b class="text-fog">${esc(nameOf(t.author))}</b></span>
+        </span>
+      </div>
+      <button id="back-home" class="btn-ghost hidden sm:block">All forums</button>
+    </div>`;
+
+  $("#thread-posts").innerHTML = slice.map((p, i) => {
+    const a = author(p.author);
+    const idx = (page - 1) * PAGE_SIZE + i + 1;
+    const myCount = DB.posts.filter(x => x.author && x.author.token === a.token).length;
+    return `<article class="bg-panel border border-line rounded-[4px] grid grid-cols-[176px_minmax(0,1fr)] overflow-hidden" data-pid="${p.id}">
+      <div class="postbit p-3 min-w-0">
+        <div class="flex items-start gap-2.5">
+          <span class="relative shrink-0">${avatar(a, "pfp-home")}</span>
+          <div class="min-w-0">
+            <b class="block text-[12.5px] text-zinc-100 truncate leading-tight">${esc(isMe(a) ? myHandle() : nameOf(a))}</b>
+            ${p.replyTo ? `<span class="block text-[9.5px] text-fog2 truncate mt-0.5">↳ Replying to <b class="text-fog font-semibold">@${esc(p.replyTo.name)}</b></span>` : ""}
+            <span class="block text-[9px] font-bold tracking-widest text-pgreen mt-0.5">● ONLINE</span>
+            <span class="block text-[9.5px] text-fog2 mt-1">session key <b class="text-fog font-mono text-[9px]">${esc(a.handle || "?")}</b></span>
+          </div>
+        </div>
+        <dl class="mt-2.5 space-y-0.5 text-[10px] text-fog2 border-t border-line2 pt-2">
+          <div class="flex justify-between"><dt>Posts</dt><dd class="text-fog font-bold">${myCount}</dd></div>
+          <div class="flex justify-between"><dt>Joined</dt><dd class="text-fog">${stamp(a.joined).split(" ").slice(0, 1)}</dd></div>
+        </dl>
+      </div>
+      <div class="min-w-0 flex flex-col">
+        <div class="flex items-center gap-2 px-3.5 py-2 border-b border-line2 bg-[#191919] text-[10.5px] text-fog2">
+          <b class="text-fog font-mono">No.${String(idx).padStart(2, "0")}</b>
+          <span class="flex-1"></span>
+          <span title="exact date/time of posting">${stamp(p.createdAt)}</span>
+          <button data-reply="${p.id}" class="text-fog2 hover:text-pgreen text-[11px]" title="reply to this comment">↩</button>
+          <button data-vote="up:${p.id}" class="flex items-center gap-1 text-fog2 hover:text-pgreen text-[11px]" title="thumbs up">👍<span>${(DB.reactions || {})[p.id]?.up || 0}</span></button>
+          <button data-vote="down:${p.id}" class="flex items-center gap-1 text-fog2 hover:text-red-400 text-[11px]" title="thumbs down">👎<span>${(DB.reactions || {})[p.id]?.down || 0}</span></button>
+          ${isMe(a) ? `<button data-del="${p.id}" class="text-fog2 hover:text-red-400 font-bold text-[10px] tracking-widest uppercase">del</button>` : ""}
+        </div>
+        <div class="px-4 py-3 text-[13px] leading-relaxed text-zinc-300 whitespace-pre-wrap overflow-wrap-anywhere flex-1">${renderPostBody(p)}</div>
+        ${p.image ? `<div class="px-3.5 pb-3">${mediaNode(p.image)}</div>` : ""}
+      </div>
+    </article>`;
+  }).join("");
+
+  $("#thread-pages").innerHTML = pageCount > 1 ? `
+    <span class="tracking-widest uppercase font-bold mr-1">Pages:</span>
+    ${Array.from({ length: pageCount }, (_, i) =>
+      `<button data-page="${i + 1}" class="pagenum ${i + 1 === page ? "cur" : ""}">${i + 1}</button>`).join("")}` : "";
+  $$("[data-page]", $("#thread-pages")).forEach(b => b.onclick = () => nav("thread/" + t.id + "/" + b.dataset.page));
+
+  /* strict vendetta-free voting: 0→1 on first click, back to 0 on the second,
+     and a switch always un-votes the opposite so you can't hold both */
+  $$("[data-vote]").forEach(b => b.onclick = () => {
+    const [dir, id] = b.dataset.vote.split(":");
+    DB.reactions = DB.reactions || {};
+    const r = DB.reactions[id] = DB.reactions[id] || { up: 0, down: 0, my: null };
+    if (r.my === dir) { r[dir] = Math.max(0, r[dir] - 1); r.my = null; }        // second click undoes → 0
+    else {
+      if (r.my) r[r.my] = Math.max(0, r[r.my] - 1);                             // auto-remove the opposite vote
+      r[dir]++; r.my = dir;
+    }
+    save();
+    const bar = b.closest("div.flex"); // counts + active tint updated in place, no full re-render
+    if (bar) ["up", "down"].forEach(d => {
+      const btn = bar.querySelector('[data-vote="' + d + ':' + id + '"]');
+      if (!btn) return;
+      btn.querySelector("span").textContent = r[d];
+      btn.classList.toggle(d === "up" ? "text-pgreen" : "text-red-400", r.my === d);
+      btn.classList.toggle("text-fog2", r.my !== d);
+    });
+  });
+  $$("[data-share]").forEach(b => b.onclick = () => shareThread(b.dataset.share));
+  $$("[data-reply]").forEach(b => b.onclick = () => {   // capture target author for attribution
+    const src = DB.posts.find(x => String(x.id) === b.dataset.reply);
+    if (!src) return;
+    replyTarget = { pid: src.id, name: nameOf(src.author) };
+    renderQuickReply(t);
+  });
+
+  $$("[data-del]").forEach(b => b.onclick = () => {
+    if (!confirm("Delete post No." + b.dataset.del + "? There is no undo, and no server to back you up.")) return;
+    DB.posts = DB.posts.filter(p => String(p.id) !== b.dataset.del);
+    save(); toast("Post deleted.", "dim"); render();
+  });
+
+  $("#exit-forum").onclick = () => {   // exit arrow: instant state flip + scroll-to-top
+    $("#view-thread").classList.add("hidden");
+    $("#view-forum").classList.remove("hidden");
+    route = { view: "forum", id: t.forumId, page: 1 };
+    location.hash = "#/forum/" + t.forumId;
+    render();
+    window.scrollTo({ top: 0, behavior: "smooth" });
+  };
+  $("#back-home").onclick = () => nav("home");
+  renderQuickReply(t);
+  bindGotos();
+  // feed deep links: land scrolled to the exact post the card pointed at
+  if (route.pid) {
+    const el = document.querySelector(`[data-pid="${route.pid}"]`);
+    if (el) el.scrollIntoView({ behavior: "smooth", block: "center" });
+    route.pid = null;
+  }
+}
+
+function renderQuickReply(t) {
+  $("#quick-reply").innerHTML = `
+    <div class="bg-panel border border-line rounded-[4px] p-3.5">
+      <b class="text-[11px] tracking-[.14em] text-[#cfe8dd] uppercase bg-[#161d1a] inline-block px-2.5 py-1.5 border-b-2 border-pgreen -ml-3.5 -mt-3.5 mb-3">QUICK REPLY</b>
+      <form id="qr-form" class="space-y-2.5">
+        <div id="qr-target" class="${replyTarget ? "" : "hidden"} flex items-center gap-2 text-[10.5px] bg-panel2 border border-line rounded-[3px] px-2.5 py-1.5">
+          <span>↳ Replying to <b class="text-fog font-semibold">@${esc(replyTarget ? replyTarget.name : "")}</b></span>
+          <button type="button" id="qr-target-x" class="underline decoration-dotted hover:text-pgreen">clear</button>
+        </div>
+        <textarea id="qr-body" class="field" rows="3" placeholder="reply as ${esc(myHandle())} — plain text, GIFs welcome below" maxlength="4000"></textarea>
+        <div class="flex items-center gap-3 flex-wrap">
+          <label class="btn-ghost cursor-pointer" id="qr-file-slot">📎 attach media
+            <input type="file" id="qr-file" accept="image/*,image/gif,video/mp4,video/webm" class="hidden">
+          </label>
+          <span id="qr-file-name" class="text-[11px] text-pgreen"></span>
+          <span class="flex-1"></span>
+          <button class="btn-green">POST REPLY</button>
+        </div>
+      </form>
+    </div>`;
+  wireImageSlot("qr-file", "qr-file-slot", "qr-file-name");
+  if (replyTarget) {
+    $("#qr-target-x").onclick = () => { replyTarget = null; renderQuickReply(t); };
+    $("#qr-body").focus();
+  }
+  $("#qr-form").onsubmit = (e) => {
+    e.preventDefault();
+    const body = $("#qr-body").value.trim();
+    const fileInput = $("#qr-file");
+    if (!body && !fileInput.dataset.url) return toast("A reply needs text, an image, or ideally both.", "warn");
+    DB.posts.push({ id: nextPostId(), threadId: t.id, forumId: t.forumId,
+      author: { token: ME.token, handle: ME.handle, name: ME.name, pfp: ME.pfp, joined: ME.joined },
+      body, image: fileInput.dataset.url || null, createdAt: Date.now(),
+      replyTo: replyTarget ? { pid: replyTarget.pid, name: replyTarget.name } : null });
+    save();
+    replyTarget = null;
+    toast(`Reply posted as ${myHandle()}.`, "ok", 2600);
+    render();
+    // land the reader on the fresh last page, like every old forum did
+    const ps = postsIn(t).length;
+    const lastPage = Math.max(1, Math.ceil(ps / PAGE_SIZE));
+    if (lastPage > (route.page || 1)) nav("thread/" + t.id + "/" + lastPage);
+  };
+}
+
+/* ——— new thread modal ——— */
+
+function newThreadModal(f) {
+  openModal(`
+    <div class="modal-head"><b>Post thread — ${esc(f.name)}</b><button id="m-x" class="iconx">✕</button></div>
+    <div class="space-y-2.5">
+      <input id="nt-title" class="field" placeholder="thread title" maxlength="90">
+      <div class="flex gap-2 flex-wrap" id="nt-tags">
+        ${Object.entries(TAGS).filter(([k]) => !f.fs || f.fs.includes(k)).map(([k, v]) =>
+          `<button type="button" data-tag="${k}" class="tagchip ${v.cls} opacity-60" style="cursor:pointer">${v.label}</button>`).join("")}
+      </div>
+      <textarea id="nt-body" class="field" rows="6" placeholder="opening post — the argument, the artifact, the outrage" maxlength="8000"></textarea>
+      <div class="flex items-center gap-2 flex-wrap">
+        <label class="btn-ghost cursor-pointer" id="nt-file-slot">📎 attach media
+          <input type="file" id="nt-file" accept="image/*,image/gif,video/mp4,video/webm" class="hidden">
+        </label>
+        <span id="nt-file-name" class="text-[11px] text-pgreen"></span>
+        <span class="flex-1"></span>
+        <button id="nt-go" class="btn-green">CREATE THREAD</button>
+      </div>
+    </div>`);
+  let tag = f.fs?.[0] || "dis";
+  const chip = $(`[data-tag="${tag}"]`, $("#nt-tags")); if (chip) chip.classList.remove("opacity-60");
+  $$("[data-tag]", $("#nt-tags")).forEach(b => b.onclick = () => {
+    tag = b.dataset.tag;
+    $$("[data-tag]", $("#nt-tags")).forEach(x => x.classList.toggle("opacity-60", x !== b));
+  });
+  $("#m-x").onclick = closeModal;
+  wireImageSlot("nt-file", "nt-file-slot", "nt-file-name");
+  $("#nt-go").onclick = () => {
+    const title = $("#nt-title").value.trim();
+    const body = $("#nt-body").value.trim();
+    if (!title || !body) { toast("Threads need both a title and an opening post. House rules since day one.", "warn"); return; }
+    const now = Date.now();
+    const t = { id: nextThreadId(), forumId: f.id, title, tag, author: { token: ME.token, handle: ME.handle, name: ME.name, pfp: ME.pfp, joined: ME.joined }, createdAt: now, image: $("#nt-file").dataset.url || null };
+    DB.threads.push(t);
+    DB.posts.push({ id: nextPostId(), threadId: t.id, forumId: f.id, author: t.author, body, image: t.image, createdAt: now });
+    save(); closeModal();
+    toast(`Thread "${title}" is live.`, "ok", 2800);
+    nav("thread/" + t.id);
+  };
+}
+
+/* ——— session / identity / block keys ——— */
+
+/* keep GIFs animated under ~600 KB raw; anything heavier gets canvas-compressed
+   to a crisp 128px JPEG so the cloud row (and LocalStorage) stays lightweight */
+function compressPFP(file) {
+  return new Promise((resolve) => {
+    /* any GIF — by MIME or by extension — is read PURELY via readAsDataURL:
+       never canvas, never drawImage, never resized. The raw data URL goes
+       straight into the <img src> of the profile elements, so frames loop */
+    const raw = () => { const r = new FileReader();
+      r.onload = () => {
+        let s = String(r.result);
+        // empty/odd MIME yields application/octet-stream — retype so <img> plays the GIF
+        if (s.indexOf("image/") === -1) {
+          const b64 = s.slice(s.indexOf("base64,") + 7);
+          s = "data:image/" + (/\.webp$/i.test(file.name) || file.type.indexOf("webp") > -1 ? "webp" : "gif") + ";base64," + b64;
+        }
+        resolve(s);
+      };
+      r.readAsDataURL(file);
+    };
+    if (file.type.indexOf("gif") > -1 || /\.gif$/i.test(file.name) || file.type.indexOf("webp") > -1) return raw();
+    if (file.size <= 200 * 1024) return raw();
+    const img = new Image();
+    img.onload = () => {
+      const k = Math.min(1, 128 / Math.max(img.width, img.height));
+      const c = document.createElement("canvas");
+      c.width = Math.max(1, Math.round(img.width * k)); c.height = Math.max(1, Math.round(img.height * k));
+      c.getContext("2d").drawImage(img, 0, 0, c.width, c.height);
+      resolve(c.toDataURL("image/jpeg", 0.72));
+    };
+    img.onerror = () => resolve(null);
+    img.src = URL.createObjectURL(file);
+  });
+}
+/* refresh every avatar surface: header badge now, next posts automatically */
+function setPfpPreview(url) {
+  if (!url) return;
+  const slot = $("#pfp-preview");
+  if (slot && slot.tagName !== "IMG") {
+    const img = document.createElement("img");
+    img.id = "pfp-preview"; img.className = "pfp pfp-bit"; img.alt = "";
+    slot.replaceWith(img);
+  }
+  const s = $("#pfp-preview");
+  if (s) { s.src = url; s.classList.add("pfp"); s.classList.add("pfp-bit"); }
+  renderChip(); // header badge renders the new PFP this exact instant
+}
+
+function openSession() {
+  openModal(`
+    <div class="modal-head"><b>Customize profile</b><button id="m-x" class="iconx">✕</button></div>
+
+    <div class="flex gap-3 items-center mt-1">
+      <span class="relative shrink-0">
+        ${ME.pfp ? `<img id="pfp-preview" src="${esc(ME.pfp)}" class="pfp pfp-bit" alt="">`
+                 : `<span id="pfp-preview" class="grid place-items-center pfp pfp-bit text-[26px] font-extrabold text-pgreen bg-gradient-to-br from-[#1f2a25] to-[#161a17]">${esc(myHandle()[0])}</span>`}
+      </span>
+      <div class="text-[10px] text-fog2 leading-relaxed">
+        <span>handle <b class="text-pgreen tracking-widest">${esc(ME.handle)}</b> · joined ${stamp(ME.joined)}</span>
+        <span class="block mt-0.5">paste a picture or animated GIF URL below — it plays live as your avatar</span>
+      </div>
+    </div>
+
+    <div class="space-y-2.5 mt-3">
+      <div>
+        <label class="text-[10px] tracking-[.14em] text-fog uppercase font-bold">Username</label>
+        <input id="me-name" class="field mt-1" placeholder="blank = ${esc(ME.handle)}" maxlength="28" value="${esc(ME.name)}">
+      </div>
+      <div>
+        <label class="text-[10px] tracking-[.14em] text-fog uppercase font-bold">Profile picture (from your device)</label>
+        <div class="flex items-center gap-2.5 mt-1">
+          <label class="btn-ghost cursor-pointer shrink-0">📂 choose file
+            <input id="me-pfp-file" type="file" accept="image/*,.gif" class="hidden">
+          </label>
+          <span id="me-pfp-name" class="text-[10.5px] text-pgreen"></span>
+        </div>
+      </div>
+      <div>
+        <label class="text-[10px] tracking-[.14em] text-fog uppercase font-bold">Bio</label>
+        <textarea id="me-bio" class="field mt-1" rows="3" maxlength="200" placeholder="a line or two about you">${esc(ME.bio || "")}</textarea>
+      </div>
+    </div>
+
+    <button id="me-save" class="btn-green w-full mt-4">save profile</button>`);
+
+  $("#m-x").onclick = closeModal;
+  // local file → optimized base64 → instant render on badge + every future post
+  $("#me-pfp-file").addEventListener("change", async (e) => {
+    const f = e.target.files[0];
+    if (!f) return;
+    if (f.size > 4 * 1024 * 1024 && !(f.type.indexOf("gif") > -1 || /\.gif$/i.test(f.name))) { e.target.value = ""; return toast("Profile images stay under 4 MB — compress it first.", "warn"); }
+    $("#me-pfp-name").textContent = "optimizing…";
+    const data = await compressPFP(f);
+    if (!data) { $("#me-pfp-name").textContent = ""; return toast("That file didn't decode as an image.", "warn"); }
+    ME.pfp = data;
+    syncProfile();               // LocalStorage session + cloud profile row (realtime)
+    setPfpPreview(data);         // in-modal preview + header badge, immediately
+    $("#me-pfp-name").textContent = f.name;
+    e.target.value = "";
+    toast("Avatar saved — it rides on every post you make from now on.", "ok", 2600);
+  });
+  $("#me-save").onclick = () => {
+    ME.name = $("#me-name").value.trim();
+    ME.bio  = $("#me-bio").value.trim();
+    syncProfile();
+    renderChip(); render(); closeModal();
+    toast("Profile saved — badge shows your new name and avatar now.", "ok", 2600);
+  };
+}
+
+/* ——— modal + image slot plumbing ——— */
+
+function openModal(inner) {
+  const root = $("#modal-root");
+  root.className = "fixed inset-0 z-40 grid place-items-center p-4 bg-black/70 backdrop-blur-[2px]";
+  root.innerHTML = `<div class="modal-card w-full max-w-[560px] max-h-[88vh] overflow-y-auto scrollzone bg-panel border border-line rounded-[4px] p-4 shadow-[0_30px_80px_-20px_#000]" onclick="event.stopPropagation()">${inner}</div>`;
+  root.onclick = closeModal;
+}
+function closeModal() { const r = $("#modal-root"); r.className = "hidden"; r.innerHTML = ""; r.onclick = null; }
+/* Esc drops the modal — the one chrome-wide keyboard rule the forum honors */
+document.addEventListener("keydown", (e) => {
+  if (e.key === "Escape" && !$("#modal-root").classList.contains("hidden")) closeModal();
+});
+
+function wireImageSlot(inputId, slotId, nameId) {
+  const input = $("#" + inputId);
+  input.addEventListener("change", () => {
+    const f = input.files[0];
+    if (!f) return;
+    const isVid = f.type.indexOf("video/") === 0;
+    if (f.size > 25 * 1024 * 1024) { input.value = ""; return toast("Media exceeds the 25 MB browser ceiling. For larger videos, please upload to a free file host and paste the link directly into your post.", "warn", 6500); }
+    const r = new FileReader();
+    r.onload = () => { input.dataset.url = r.result; input.dataset.mediatype = isVid ? "video" : "image"; $("#" + nameId).textContent = f.name; };
+    r.readAsDataURL(f);
+  });
+}
+
+/* dynamic media mapping: data-URL prefix (or extension) decides the node —
+   video files never get tortured into an <img> */
+function mediaNode(src) {
+  const head = String(src).slice(0, 60);
+  const isVid = head.startsWith("data:video/") || /\.(mp4|webm)(\?[^"<>\s]*)?$/i.test(src);
+  if (!isVid) return `<img src="${esc(src)}" alt="" class="pfp max-h-64" loading="lazy">`;
+  const m = head.match(/data:video\/([\w.]+)/);
+  const type = m ? "video/" + m[1] : (/\.(webm)(\?|$)/i.test(src) ? "video/webm" : "video/mp4");
+  return `<video controls loop preload="metadata" class="max-w-full h-auto rounded-lg border border-emerald-500/20 mt-2"><source src="${esc(src)}" type="${type}"></video>`;
+}
+
+function bindGotos() {
+  $$(".goto").forEach(b => { b.onclick = () => goto(b.dataset.goto); });
+}
+
+/* ——— share: copy thread link to clipboard + temporary confirmation badge ——— */
+function copyText(s) {
+  if (navigator.clipboard && navigator.clipboard.writeText) { navigator.clipboard.writeText(s).catch(() => {}); return; }
+  const ta = document.createElement("textarea"); ta.value = s; document.body.appendChild(ta); ta.select();
+  try { document.execCommand("copy"); } catch (e) {} ta.remove();
+}
+function shareThread(tid) {
+  copyText(location.origin + location.pathname + "#/thread/" + tid);
+  toast("Link Copied!", "dim", 1500); // pops up on screen, fades out
+}
+
+function toast(msg, kind = "ok", ms = 3600) {
+  const box = document.createElement("div");
+  box.className = "toast bg-panel border border-line border-l-2 border-l-pgreen rounded-[3px] px-3.5 py-2.5 text-[12px] text-zinc-200 shadow-[0_14px_36px_-12px_rgba(0,0,0,.8)]"
+    + (kind === "warn" ? " !border-l-red-400" : kind === "dim" ? " !border-l-fog2" : "");
+  box.textContent = msg;
+  $("#toasts").appendChild(box);
+  setTimeout(() => { box.classList.add("leaving"); setTimeout(() => box.remove(), 220); }, ms);
+}
+
+const nextPostId   = () => DB.posts.reduce((m, p) => Math.max(m, p.id), 0) + 1;
+/* URL patch: scheme links, www.-prefixed and bare TLD domains all become
+   bright-blue anchors opening in a separate native tab. Scheme targets are
+   tokenized first so nothing is ever double-wrapped. */
+function linkify(escaped) {
+  const wrap = (u) =>
+    `<a href="${u}" target="_blank" rel="noopener noreferrer" class="text-blue-500 hover:underline cursor-pointer font-medium">${u}</a>`;
+  const tokens = [];
+  const stash = (u) => { tokens.push(wrap(u)); return "\u0000" + (tokens.length - 1) + "\u0000"; };
+  let out = escaped.replace(/https?:\/\/[^\s<>"')]+/g, (u) => stash(u));
+  out = out.replace(/\bwww\.[^\s<>"')]+/gi, (u) => stash("https://" + u));
+  /* bare domain text: domain ending in a popular TLD, optional path — no
+     scheme, no www needed ("files.org/f.txt", "my-board.gg") */
+  out = out.replace(/\b[a-z0-9-]+(?:\.[a-z0-9-]+)*\.(?:com|net|org|io|cc|gg|tv|to|me|ru|su|ai|app|dev|xyz|zip|us|uk|pl|cn|info|onion)\b(?:\/[^\s<>"')]*)?/gi,
+    (u) => stash("https://" + u));
+  return out.replace(/\u0000(\d+)\u0000/g, (m, i) => tokens[Number(i)]);
+}
+
+/* video replies: a raw .mp4/.webm/... URL submitted in any post is pulled out
+   of the text and re-formatted as a native HTML5 inline player */
+const VIDEO_RE = /\bhttps?:\/\/[^\s<>"')]+\.((?:mp4|webm|ogg|mov|m4v))(?:\?[^"<>\s)]*)?/gi;
+const VIDEO_TYPES = { mp4: "video/mp4", m4v: "video/mp4", webm: "video/webm", ogg: "video/ogg", mov: "video/quicktime" };
+function renderPostBody(p) {
+  const escaped = esc(p.body);
+  const vids = [];
+  const text = escaped.replace(VIDEO_RE, (u) => { vids.push(u); return ""; }); // strip from text, becomes a player
+  const players = vids.map((u) => {
+    const ext = (u.match(VIDEO_RE) ? u.replace(VIDEO_RE, "$1") : "mp4").toLowerCase();
+    const type = VIDEO_TYPES[ext] || "video/mp4";
+    return `<video controls preload="metadata" class="max-w-full h-auto rounded mt-2"><source src="${u}" type="${type}"></video>`;
+  });
+  return linkify(text) + (players.length ? `<div class="mt-2">${players.join("")}</div>` : "");
+}
+const nextThreadId = () => DB.threads.reduce((m, t) => Math.max(m, t.id), 0) + 1;
+
+/* ——— boot ——— */
+/* bell: micro-dropdown of the newest "Anonymous replied to your post" alert —
+   clicking it clears the dot, jumps to the thread page and smooth-scrolls */
+$("#notif-bell").onclick = (e) => {
+  e.stopPropagation();
+  const pop = $("#notif-pop");
+  /* strict toggle: each bell tap flips the panel; zero alerts → empty state */
+  if (!pop.classList.contains("hidden")) { pop.classList.add("hidden"); return; }
+  if (!alerts.length) {
+    pop.innerHTML = `<div class="px-4 py-5 text-center text-[11.5px] text-fog2 tracking-wide">No new notifications</div>`;
+    pop.classList.remove("hidden");
+    return;
+  }
+  const a = alerts[alerts.length - 1];
+  const t = tOf(a.threadId);
+  pop.innerHTML = `<button class="w-full text-left px-3 py-2.5 hover:bg-panel2 text-[12px] text-zinc-200 leading-snug">Anonymous replied to your post
+    <span class="block text-[10.5px] text-fog2 mt-0.5 font-semibold truncate">${esc(t ? t.title : "")}</span>
+    <span class="block text-[10px] text-fog2">by ${esc(a.by)} · just now</span></button>`;
+  $("#notif-dot").classList.add("hidden");
+  pop.classList.remove("hidden");
+  pop.firstElementChild.onclick = () => {
+    pop.classList.add("hidden");
+    alerts.length = 0;
+    const ps = threadPosts(t).filter(q => !blockedAuthor(q.author));
+    const pg = Math.max(1, Math.ceil(ps.length / PAGE_SIZE));
+    nav("thread/" + a.threadId + "/" + pg + "/" + a.pid);
+  };
+};
+document.addEventListener("click", (e) => { // close the dropdown on any outside tap
+  const pop = $("#notif-pop");
+  if (pop && !pop.classList.contains("hidden") && !pop.contains(e.target)) pop.classList.add("hidden");
+});
+fromHash();
+cloudInit(); // no-op with empty keys; with keys pasted it pulls + subscribes
+setInterval(() => {               // relative timestamps stay honest without re-rendering everything
+  if (route.view === "home" || route.view === "forum") return;
+  if (!$("#view-thread").classList.contains("hidden")) return;
+  renderSidebar();
+}, 60000);
+
+})();
+</script>
+</body>
+</html>
