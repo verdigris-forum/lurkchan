@@ -230,64 +230,89 @@ select.field { appearance:none; background-image:url("data:image/svg+xml,%3Csvg 
 (() => {
 
 /* ═════════════════════════════════════════════════════════════════
-   ☁ CLOUD SYNC — paste your FREE Supabase keys below.
-   supabase.com → new project (free tier) → Project Settings → API
-     SUPABASE_URL = "https://xxxxx.supabase.co"
-     SUPABASE_KEY = "eyJ..." (anon, public)
-   Run this ONCE in the Supabase SQL Editor, then enable Realtime:
-     create table vf_state (id text primary key, data jsonb, updated_at timestamptz default now());
-     alter table vf_state enable row level security;
-     create policy "vf_public" on vf_state for all using (true) with check (true);
-     alter publication supabase_realtime add table vf_state;
-   With keys pasted: threads + posts live in the cloud, every device
-   sees each other's posts in real time, and your profile (name /
-   avatar / bio) syncs under your own session key.
-   With keys left empty: everything still works, stored locally.
+   ☁ LIVE SUPABASE CLOUD BOARD — row-per-message `posts` table.
+   Your live table already exists with bigint auto ids:
+     id bigint identity primary key, created_at timestamptz default now(),
+     board text, thread_id bigint, parent_id bigint, author text,
+     pfp text, title text, content text, media text,
+     likes int default 0, dislikes int default 0.
+   The client NEVER sends `id` — the server mints it and the insert
+   returns it with .select(). OP rows self-link thread_id after insert.
+   Threads = rows with a title; replies hang off thread_id / parent_id.
+   Likes & dislikes are live counters on the row. The user's own
+   profile (username, GIF PFP, bio) stays in browser LocalStorage —
+   no login, no accounts.
    ═════════════════════════════════════════════════════════════════ */
-const SUPABASE_URL = "";  // ← paste here
-const SUPABASE_KEY = "";  // ← paste here
+const SUPABASE_URL = "https://xmhtlrnhacikuvrgvuji.supabase.co";
+const SUPABASE_KEY = "sb_publishable_ZJ0WFdEvO-CEe2dET4rYzA_nIeYGCyU";
 
-let SC = null, cloudOn = false;
+let SC = null, cloudOn = false, lastSig = "";
 if (typeof supabase !== "undefined" && SUPABASE_URL && SUPABASE_KEY) {
   try { SC = supabase.createClient(SUPABASE_URL, SUPABASE_KEY); } catch (e) { SC = null; }
 }
-
-/* cloud bootstrap: pull the board + this session's profile, then ride realtime */
+const uid = () => (window.crypto && crypto.randomUUID) ? crypto.randomUUID() : "id-" + Date.now().toString(36) + Math.random().toString(36).slice(2, 8);
+const parseAuthor = (raw) => {
+  try { const j = JSON.parse(raw); return { token: j.token || String(raw), handle: j.handle || "??????", name: j.name || "", pfp: j.pfp || null, joined: j.joined || 0 }; }
+  catch (e) { return { token: String(raw || "ghost"), handle: String(raw || "ghost").slice(0, 8).toUpperCase(), name: "", pfp: null, joined: 0 }; }
+};
+/* Supabase posts row ⇄ local render model */
+function rowToPost(r) {
+  return { id: String(r.id), threadId: String(r.thread_id ?? r.id), forumId: r.board || "games",
+    author: parseAuthor(r.author), pfp: r.pfp || null,
+    body: r.content || "", image: r.media || null,
+    likes: r.likes || 0, dislikes: r.dislikes || 0,
+    createdAt: Date.parse(r.created_at) || Date.now(),
+    replyTo: r.parent_id ? { pid: r.parent_id, name: "" } : null };
+}
+function applyRow(r, ev) {
+  if (!r) return;
+  if (ev === "DELETE") {
+    DB.posts = DB.posts.filter(x => String(x.id) !== String(r.id));
+    DB.threads = DB.threads.filter(t => String(t.id) !== String(r.id));
+    DB.reactions = DB.reactions || {};
+    delete DB.reactions[r.id];
+    return;
+  }
+  const p = rowToPost(r);
+  const i = DB.posts.findIndex(x => String(x.id) === String(p.id));
+  if (i > -1) DB.posts[i] = p; else DB.posts.push(p);
+  if (p.replyTo) { const par = DB.posts.find(x => String(x.id) === String(p.replyTo.pid)); p.replyTo.name = par ? nameOf(par.author) : ""; }
+  if (r.title) {
+    const th = { id: String(r.thread_id ?? r.id), forumId: r.board, title: r.title, tag: null, author: p.author, createdAt: p.createdAt, image: r.media || null };
+    const ti = DB.threads.findIndex(t => String(t.id) === String(th.id));
+    if (ti > -1) DB.threads[ti] = { ...DB.threads[ti], ...th }; else DB.threads.push(th);
+  }
+  DB.reactions = DB.reactions || {};
+  DB.reactions[p.id] = { up: p.likes, down: p.dislikes, my: (DB.reactions[p.id] || {}).my || null };
+}
+/* fetch every row and paint the exact existing dark-green layout */
+async function loadBoard(silent) {
+  const res = await SC.from("posts").select("*").order("created_at", { ascending: true });
+  if (res.error) { if (!silent) toast("Supabase read failed: " + res.error.message, "warn", 6000); return; }
+  DB.threads = []; DB.posts = []; DB.reactions = {};
+  for (const r of res.data || []) applyRow(r, "INSERT");
+  const mine = LS.read("vf_votes_mine", {});
+  for (const p of DB.posts) if (DB.reactions[p.id]) DB.reactions[p.id].my = mine[p.id] || null;
+  LS.write(DB_KEY, DB);
+  const sig = JSON.stringify([DB.threads, DB.posts]);
+  if (sig !== lastSig) { lastSig = sig; render(); }
+}
+/* live connection: initial fetch + realtime channel + 5s safety poll */
 async function cloudInit() {
-  if (!SC) return;
+  if (!SC) { toast("Supabase client failed to load — board runs on the local cache.", "warn", 5000); return; }
   try {
-    const meRow = await SC.from("vf_state").select("data").eq("id", "profile:" + ME.token).maybeSingle();
-    if (!meRow.error && meRow.data?.data && meRow.data.data.token === ME.token) {
-      ME = { bio: "", ...meRow.data.data }; LS.write(SESSION, ME);
-    }
-    const board = await SC.from("vf_state").select("data").eq("id", "forum").maybeSingle();
-    if (!board.error && board.data?.data?.threads) {
-      DB = { threads: board.data.data.threads || [], posts: board.data.data.posts || [],
-             viewCounts: board.data.data.viewCounts || {}, blocked: board.data.data.blocked || [],
-             reactions: board.data.data.reactions || {} };
-      LS.write(DB_KEY, DB);
-    }
+    await loadBoard();
     cloudOn = true;
-    SC.channel("vf-feed").on("postgres_changes", { event: "*", schema: "public", table: "vf_state" }, (pay) => {
-      const d = pay.new && pay.new.data;
-      if (!d) return;
-      if (pay.new.id === "forum") {
-        DB = { threads: d.threads || [], posts: d.posts || [], viewCounts: d.viewCounts || {},
-               blocked: d.blocked || [], reactions: d.reactions || {} };
-        render();
-      } else if (pay.new.id === "profile:" + ME.token && d.token === ME.token) {
-        ME = { bio: "", ...d }; LS.write(SESSION, ME); renderChip();
-      }
-    }).subscribe();
-    render();
-    toast("Cloud sync is live — posts from any device appear here in real time.", "ok", 5000);
+    SC.channel("posts-live").on("postgres_changes", { event: "*", schema: "public", table: "posts" },
+      (pay) => { applyRow(pay.new || pay.old, pay.eventType); lastSig = ""; render(); }).subscribe();
+    setInterval(() => { if (!document.hidden) loadBoard(true); }, 5000);
+    toast("Live cloud board connected — every device sees the same posts in real time.", "ok", 5000);
   } catch (e) { toast("Cloud sync failed: " + (e.message || e), "warn", 6000); }
 }
 
 /* profile write-through: local session always, cloud row when synced */
 function syncProfile() {
-  LS.write(SESSION, ME);
-  if (SC && cloudOn) SC.from("vf_state").upsert({ id: "profile:" + ME.token, data: ME });
+  LS.write(SESSION, ME); // personal profile stays purely local — no login
 }
 
 /* ——— toolbelt ——— */
@@ -410,8 +435,7 @@ function save() {
   // debounce ~300ms: reply spam shouldn't lockstep-crash LocalStorage on IE-era disks
   clearTimeout(saveT);
   saveT = setTimeout(() => {
-    const ok = LS.write(DB_KEY, DB); // local cache keeps offline / keyless mode alive
-    if (SC && cloudOn) SC.from("vf_state").upsert({ id: "forum", data: DB }); // one jsonb row = one world-visible board
+    const ok = LS.write(DB_KEY, DB); // local cache keeps offline browsing alive; cloud writes are per-row
     if (!ok) { // a single >5MB GIF can blow the quota; shed the biggest data-URL we own and retry
       let worst = null, size = 0;
       for (const t of DB.threads) if (t.image && t.image.length > size) { size = t.image.length; worst = t; }
@@ -442,7 +466,7 @@ const lastOfForum = (fid) => {
   }
   return best;
 };
-const tOf = (tid) => DB.threads.find(t => t.id === tid);
+const tOf = (tid) => DB.threads.find(t => String(t.id) === String(tid));
 
 /* ════════════════════ router ════════════════════ */
 
@@ -453,7 +477,7 @@ function nav(to) { location.hash = to === "home" ? "" : "#/" + to; }
 function fromHash() {
   const h = decodeURIComponent(location.hash.replace(/^#\/?/, ""));
   if (!h) route = { view: "home" };
-  else if (h.startsWith("thread/"))  route = { view: "thread", id: Number(h.split("/")[1]), page: Number(h.split("/")[2]) || 1, pid: h.split("/")[3] || null };
+  else if (h.startsWith("thread/"))  route = { view: "thread", id: h.split("/")[1], page: Number(h.split("/")[2]) || 1, pid: h.split("/")[3] || null };
   else if (h.startsWith("forum/"))   route = { view: "forum", id: h.split("/")[1], page: Number(h.split("/")[2]) || 1 };
   else route = { view: "home", stray: h };
   render();
@@ -782,6 +806,10 @@ function renderThread(t, page) {
       r[dir]++; r.my = dir;
     }
     save();
+    // per-session vote direction stays local; the counters live on the cloud row
+    const mine = LS.read("vf_votes_mine", {}); mine[id] = r.my; LS.write("vf_votes_mine", mine);
+    if (SC && cloudOn) SC.from("posts").update({ likes: r.up, dislikes: r.down }).eq("id", id)
+      .then((res) => { if (res.error) toast("Like sync failed: " + res.error.message, "warn", 4000); });
     const bar = b.closest("div.flex"); // counts + active tint updated in place, no full re-render
     if (bar) ["up", "down"].forEach(d => {
       const btn = bar.querySelector('[data-vote="' + d + ':' + id + '"]');
@@ -801,7 +829,9 @@ function renderThread(t, page) {
 
   $$("[data-del]").forEach(b => b.onclick = () => {
     if (!confirm("Delete post No." + b.dataset.del + "? There is no undo, and no server to back you up.")) return;
+    if (SC && cloudOn) SC.from("posts").delete().eq("id", b.dataset.del); // cloud row removal syncs to every device
     DB.posts = DB.posts.filter(p => String(p.id) !== b.dataset.del);
+    DB.threads = DB.threads.filter(t => String(t.id) !== b.dataset.del);
     save(); toast("Post deleted.", "dim"); render();
   });
 
@@ -825,6 +855,7 @@ function renderThread(t, page) {
 }
 
 function renderQuickReply(t) {
+  const priorBody = $("#qr-body") ? $("#qr-body").value : ""; // survive realtime re-renders while typing
   $("#quick-reply").innerHTML = `
     <div class="bg-panel border border-line rounded-[4px] p-3.5">
       <b class="text-[11px] tracking-[.14em] text-[#cfe8dd] uppercase bg-[#161d1a] inline-block px-2.5 py-1.5 border-b-2 border-pgreen -ml-3.5 -mt-3.5 mb-3">QUICK REPLY</b>
@@ -844,20 +875,38 @@ function renderQuickReply(t) {
         </div>
       </form>
     </div>`;
+  if (priorBody) $("#qr-body").value = priorBody;
   wireImageSlot("qr-file", "qr-file-slot", "qr-file-name");
   if (replyTarget) {
     $("#qr-target-x").onclick = () => { replyTarget = null; renderQuickReply(t); };
     $("#qr-body").focus();
   }
-  $("#qr-form").onsubmit = (e) => {
+  $("#qr-form").onsubmit = async (e) => {
     e.preventDefault();
     const body = $("#qr-body").value.trim();
     const fileInput = $("#qr-file");
     if (!body && !fileInput.dataset.url) return toast("A reply needs text, an image, or ideally both.", "warn");
-    DB.posts.push({ id: nextPostId(), threadId: t.id, forumId: t.forumId,
-      author: { token: ME.token, handle: ME.handle, name: ME.name, pfp: ME.pfp, joined: ME.joined },
-      body, image: fileInput.dataset.url || null, createdAt: Date.now(),
-      replyTo: replyTarget ? { pid: replyTarget.pid, name: replyTarget.name } : null });
+    const now = Date.now();
+    const rt = replyTarget ? { pid: replyTarget.pid, name: replyTarget.name } : null;
+    $("#qr-body").value = ""; // protected from re-render restore below
+    if (SC && cloudOn) {      // cloud row: the server mints the bigint id — never send one
+      const me = { token: ME.token, handle: ME.handle, name: myHandle(), pfp: ME.pfp, joined: ME.joined };
+      const row = { board: t.forumId, thread_id: t.id, parent_id: rt ? String(rt.pid) : null,
+        author: JSON.stringify(me), pfp: ME.pfp, title: null, content: body,
+        media: fileInput.dataset.url || null, likes: 0, dislikes: 0 };
+      const res = await SC.from("posts").insert(row).select().single();
+      if (res.error) { toast("Reply failed to reach the cloud: " + res.error.message, "warn", 5000); return; }
+      const rid = String(res.data.id);
+      DB.posts.push({ id: rid, threadId: String(t.id), forumId: t.forumId, author: me,
+        body, image: row.media, createdAt: now, likes: 0, dislikes: 0, replyTo: rt });
+      DB.reactions = DB.reactions || {};
+      DB.reactions[rid] = { up: 0, down: 0, my: null };
+      lastSig = "";
+    } else {
+      DB.posts.push({ id: nextPostId(), threadId: t.id, forumId: t.forumId,
+        author: { token: ME.token, handle: ME.handle, name: ME.name, pfp: ME.pfp, joined: ME.joined },
+        body, image: fileInput.dataset.url || null, createdAt: now, replyTo: rt });
+    }
     save();
     replyTarget = null;
     toast(`Reply posted as ${myHandle()}.`, "ok", 2600);
@@ -898,12 +947,33 @@ function newThreadModal(f) {
   });
   $("#m-x").onclick = closeModal;
   wireImageSlot("nt-file", "nt-file-slot", "nt-file-name");
-  $("#nt-go").onclick = () => {
+  $("#nt-go").onclick = async () => {
     const title = $("#nt-title").value.trim();
     const body = $("#nt-body").value.trim();
     if (!title || !body) { toast("Threads need both a title and an opening post. House rules since day one.", "warn"); return; }
     const now = Date.now();
-    const t = { id: nextThreadId(), forumId: f.id, title, tag, author: { token: ME.token, handle: ME.handle, name: ME.name, pfp: ME.pfp, joined: ME.joined }, createdAt: now, image: $("#nt-file").dataset.url || null };
+    const me = { token: ME.token, handle: ME.handle, name: myHandle(), pfp: ME.pfp, joined: ME.joined };
+    const media = $("#nt-file").dataset.url || null;
+    if (SC && cloudOn) {   // cloud: the OP row IS the thread — replies hang off its bigint id
+      const row = { board: f.id, thread_id: null, parent_id: null,
+        author: JSON.stringify(me), pfp: ME.pfp, title, content: body, media, likes: 0, dislikes: 0 };
+      const res = await SC.from("posts").insert(row).select().single();
+      if (res.error) { toast("Thread failed to reach the cloud: " + res.error.message, "warn", 5000); return; }
+      const rid = String(res.data.id);
+      SC.from("posts").update({ thread_id: rid }).eq("id", rid) // self-link the OP row
+        .then((r2) => { if (r2.error) console.warn("thread self-link failed:", r2.error.message); });
+      const t = { id: rid, forumId: f.id, title, tag, author: me, createdAt: now, image: media };
+      DB.threads.push(t);
+      DB.posts.push({ id: rid, threadId: rid, forumId: f.id, author: me, body, image: media, createdAt: now, likes: 0, dislikes: 0, replyTo: null });
+      DB.reactions = DB.reactions || {};
+      DB.reactions[rid] = { up: 0, down: 0, my: null };
+      lastSig = "";
+      save(); closeModal();
+      toast(`Thread "${title}" is live on the cloud board.`, "ok", 2800);
+      nav("thread/" + rid);
+      return;
+    }
+    const t = { id: nextThreadId(), forumId: f.id, title, tag, author: me, createdAt: now, image: media };
     DB.threads.push(t);
     DB.posts.push({ id: nextPostId(), threadId: t.id, forumId: f.id, author: t.author, body, image: t.image, createdAt: now });
     save(); closeModal();
